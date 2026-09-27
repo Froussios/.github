@@ -6,14 +6,14 @@
 #   curl -fsSL https://raw.githubusercontent.com/Froussios/.github/main/bootstrap.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Froussios/.github/main/bootstrap.sh | bash -s -- --dry-run
 #
-# It writes the caller workflow, sets the ANTHROPIC_API_KEY repo secret and commits
+# It writes the caller workflow, sets the CLAUDE_CODE_OAUTH_TOKEN repo secret and commits
 # locally. It never pushes.
 set -euo pipefail
 
 OWNER="Froussios"
 CENTRAL_REPO="Froussios/.github"
 WORKFLOW_PATH=".github/workflows/claude-review.yml"
-SECRET_NAME="ANTHROPIC_API_KEY"
+SECRET_NAME="CLAUDE_CODE_OAUTH_TOKEN"
 COMMIT_MSG="ci: opt in to Claude PR review"
 
 # Keep in sync with caller.yml at the root of Froussios/.github.
