@@ -6,7 +6,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/Froussios/.github/main/bootstrap.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Froussios/.github/main/bootstrap.sh | bash -s -- --dry-run
 #
-# It writes the caller workflow, sets the CLAUDE_CODE_OAUTH_TOKEN repo secret and commits
+# It checks the repo settings the review guide relies on (offering to enable issues),
+# writes the caller workflow, sets the CLAUDE_CODE_OAUTH_TOKEN repo secret and commits
 # locally. It never pushes.
 set -euo pipefail
 
@@ -37,9 +38,11 @@ usage() {
 Usage: bootstrap.sh [--dry-run] [--help]
 
 Opt the current git repository (owned by ${OWNER}) in to Claude PR review:
-  1. write ${WORKFLOW_PATH} (calls the reusable workflow in ${CENTRAL_REPO})
-  2. set the ${SECRET_NAME} repo secret (from \$${SECRET_NAME} or a silent prompt)
-  3. commit the workflow on the current branch (never pushes)
+  1. check the repo settings the review guide relies on (issues on, merge method,
+     protection of the default branch); offer to enable issues if they are off
+  2. write ${WORKFLOW_PATH} (calls the reusable workflow in ${CENTRAL_REPO})
+  3. set the ${SECRET_NAME} repo secret (from \$${SECRET_NAME} or a silent prompt)
+  4. commit the workflow on the current branch (never pushes)
 
 Options:
   --dry-run   Print what would happen; change nothing.
@@ -84,7 +87,46 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
 info "Opting in $REPO"
 [[ $DRY_RUN -eq 1 ]] && info "Dry run: nothing will be changed"
 
-# 1. Workflow file
+# 1. Repo settings the review guide relies on. Read-only, except enabling issues on request.
+SETTINGS=$(gh repo view "$REPO" \
+  --json hasIssuesEnabled,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,defaultBranchRef \
+  -q '.hasIssuesEnabled, .squashMergeAllowed, .mergeCommitAllowed, .rebaseMergeAllowed, .defaultBranchRef.name') \
+  || die "could not read the settings of $REPO"
+{ read -r HAS_ISSUES; read -r SQUASH; read -r MERGE; read -r REBASE; read -r DEFAULT_BRANCH; } <<<"$SETTINGS"
+
+# Every PR must link an issue, so issues must be on.
+if [[ "$HAS_ISSUES" != "true" ]]; then
+  info "Issues are disabled on $REPO; the reviewer rejects every PR that is not linked to an issue"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    dry "ask before enabling issues on $REPO"
+  elif ask_yes "Enable issues on $REPO?"; then
+    gh repo edit "$REPO" --enable-issues
+    info "Enabled issues on $REPO"
+  else
+    info "Leaving issues disabled; PRs will fail review until they are enabled"
+  fi
+fi
+
+# The reviewer merges a 5/5 PR with the first allowed method of squash, merge, rebase.
+if [[ "$SQUASH" == "true" ]]; then MERGE_METHOD=squash
+elif [[ "$MERGE" == "true" ]]; then MERGE_METHOD=merge
+else MERGE_METHOD=rebase; fi
+info "Merge method the reviewer will use: $MERGE_METHOD (pin another in .github/review-guide.md)"
+
+# The guide assumes the owner can merge at any score; protection on the default branch may say otherwise.
+# gh api prints the error body to stdout on 404/403, so reset on failure rather than test for emptiness.
+PROTECTION=$(gh api "repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
+  -q '"approvals=\(.required_pull_request_reviews.required_approving_review_count // 0) dismiss_stale=\(.required_pull_request_reviews.dismiss_stale_reviews // false) enforce_admins=\(.enforce_admins.enabled)"' \
+  2>/dev/null) || PROTECTION=""
+RULES=$(gh api "repos/$REPO/rules/branches/$DEFAULT_BRANCH" -q '[.[].type] | unique | join(" ")' 2>/dev/null) || RULES=""
+if [[ -z "$PROTECTION" && -z "$RULES" ]]; then
+  info "$DEFAULT_BRANCH is unprotected: reviews are advisory; anyone with write access can merge at any score"
+else
+  info "$DEFAULT_BRANCH is protected (classic: ${PROTECTION:-none}; ruleset rules: ${RULES:-none})"
+  info "The reviewer assumes you, the owner, can merge at any score; check that these rules let you bypass"
+fi
+
+# 2. Workflow file
 WRITE_WORKFLOW=1
 if [[ -f "$WORKFLOW_PATH" ]]; then
   if [[ "$(cat "$WORKFLOW_PATH")" == "$CALLER_YML" ]]; then
@@ -111,7 +153,7 @@ if [[ $WRITE_WORKFLOW -eq 1 ]]; then
   fi
 fi
 
-# 2. Secret
+# 3. Secret
 SET_SECRET=1
 if gh secret list --repo "$REPO" --json name -q '.[].name' | grep -qx "$SECRET_NAME"; then
   if [[ $DRY_RUN -eq 1 ]]; then
@@ -142,7 +184,7 @@ if [[ $SET_SECRET -eq 1 ]]; then
   fi
 fi
 
-# 3. Commit (never push)
+# 4. Commit (never push)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [[ $DRY_RUN -eq 1 ]]; then
   dry "git add $WORKFLOW_PATH && git commit -m \"$COMMIT_MSG\" on branch $BRANCH (if there are changes)"
@@ -155,8 +197,6 @@ else
     info "Committed on $BRANCH (not pushed)"
   fi
 fi
-
-DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "the default branch")
 
 cat <<EOF
 
