@@ -61,9 +61,11 @@ info() { echo "==> $*"; }
 dry() { echo "[dry-run] would: $*"; }
 
 # Prompts read from the terminal so they work when the script itself is piped to bash.
+have_tty() { (: </dev/tty) 2>/dev/null; }
+
 ask_yes() {
   local reply
-  [[ -r /dev/tty ]] || die "cannot prompt (no terminal) for: $1"
+  have_tty || die "cannot prompt (no terminal) for: $1"
   read -r -p "$1 [y/N] " reply </dev/tty
   [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
@@ -129,7 +131,7 @@ if [[ $SET_SECRET -eq 1 ]]; then
   else
     value="${!SECRET_NAME:-}"
     if [[ -z "$value" ]]; then
-      [[ -r /dev/tty ]] || die "no terminal to prompt for $SECRET_NAME; export it and re-run"
+      have_tty || die "no terminal to prompt for $SECRET_NAME; export it and re-run"
       read -rs -p "Enter $SECRET_NAME: " value </dev/tty
       echo
     fi
